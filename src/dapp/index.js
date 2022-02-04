@@ -15,6 +15,14 @@ import './flightsurety.css';
             console.log(error,result);
             display('Operational Status', 'Check if contract is operational', [ { label: 'Operational Status', error: error, value: result} ]);
         });
+
+        contract.getArilineName((error, result) => {
+            let {0: mark, 1: registered, 2: name, 3: confirmations, 4: funded} = result;
+            let select = DOM.elid('airlines');
+            let option = DOM.option({value: contract.airlines[0]}, name)
+            select.innerHTML = ''
+            select.appendChild(option)
+        })
     
 
         // User-submitted transaction
@@ -24,6 +32,15 @@ import './flightsurety.css';
             contract.fetchFlightStatus(flight, (error, result) => {
                 display('Oracles', 'Trigger oracles', [ { label: 'Fetch Flight Status', error: error, value: result.flight + ' ' + result.timestamp} ]);
             });
+        })
+
+        DOM.elid('buy').addEventListener('click', () => {
+            let airline = DOM.elid('airlines').value
+            let flight = DOM.elid('flight-numbers').value
+            let value = DOM.elid('value').value
+            contract.purchaseInsurance(airline, flight, value, (error, result) => {
+                display('Insurance purchase', 'Purchased insurance',  [ { label: 'Insurance purchase status', error: error, value: result.flight + ' ' + result.passager + ' ' + result.value} ])
+            })
         })
     
     });

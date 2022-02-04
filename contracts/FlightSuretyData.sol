@@ -11,6 +11,30 @@ contract FlightSuretyData {
 
     address private contractOwner;                                      // Account used to deploy contract
     bool private operational = true;                                    // Blocks all state changes throughout the contract if false
+    mapping(address => uint256)  authorizedContracts;
+    mapping(string => Insurance[]) insurances;
+    mapping(address => mapping(string => bool)) insurancesByCustomer; 
+    mapping(address => uint256) credit;
+
+    address[] private multiCalls = new address[](0);
+
+    mapping(address => Airline) airlines;
+    int256 nAirlines;
+
+    struct Airline {
+        int256 mark;
+        bool funded;
+        string name;
+        address[] confirmations;
+        bool registered;
+    }
+
+    struct Insurance {
+        address airline;
+        uint256 value;
+        bool paidOut;
+        address customer;
+    }
 
     /********************************************************************************************/
     /*                                       EVENT DEFINITIONS                                  */
@@ -23,10 +47,13 @@ contract FlightSuretyData {
     */
     constructor
                                 (
+                                    address airline,
+                                    string name
                                 ) 
                                 public 
     {
         contractOwner = msg.sender;
+        airlines[airline] = Airline(1, false, name, new address[](0), true);
     }
 
     /********************************************************************************************/
@@ -56,9 +83,23 @@ contract FlightSuretyData {
         _;
     }
 
+
+    modifier isCallerAuthorized()
+    {
+        require(authorizedContracts[msg.sender] == 1, "Caller is not authorized");
+        _;
+    }
     /********************************************************************************************/
     /*                                       UTILITY FUNCTIONS                                  */
     /********************************************************************************************/
+
+    function authorizeContract(address c) external requireContractOwner {
+        authorizedContracts[c] = 1;
+    }
+
+    function deauthorizeContract(address c) external requireContractOwner {
+        delete authorizedContracts[c];
+    }
 
     /**
     * @dev Get operating status of contract
@@ -73,6 +114,14 @@ contract FlightSuretyData {
         return operational;
     }
 
+    function getAirline(address a) public view returns(int256, bool, string, address[], bool) {
+        return (airlines[a].mark, airlines[a].registered, airlines[a].name, airlines[a].confirmations, airlines[a].funded);
+    }
+
+    function getNumberOfAirlines() public view returns (int256) {
+        return nAirlines;
+    }
+
 
     /**
     * @dev Sets contract operations on/off
@@ -83,10 +132,25 @@ contract FlightSuretyData {
                             (
                                 bool mode
                             ) 
-                            external
-                            requireContractOwner 
+                            external 
+                            isCallerAuthorized
     {
-        operational = mode;
+        require(mode != operational, "new mode must be different from existing mode");
+        require(airlines[tx.origin].funded, "caller must be registered and funded airline");
+        bool isDuplicate = false;
+        for (uint c = 0; c < multiCalls.length; c++) {
+            if (multiCalls[c] == tx.origin) {
+                isDuplicate = true;
+                break;
+            }
+        }
+        require(!isDuplicate, "caller has already called this function");
+
+        multiCalls.push(tx.origin);
+        if (multiCalls.length > uint256(nAirlines / 2)) {
+            operational = mode;
+            multiCalls = new address[](0);
+        } 
     }
 
     /********************************************************************************************/
@@ -100,10 +164,40 @@ contract FlightSuretyData {
     */   
     function registerAirline
                             (   
+                                address a,
+                                string name
                             )
                             external
-                            pure
+                            isCallerAuthorized
+                            requireIsOperational
+                            returns(bool success, uint256 votes)
     {
+        if (nAirlines < 4) {
+            require(airlines[tx.origin].funded, "Only registered airlines can register other airlines");
+            require(airlines[a].mark == 0, "Airline has already been registered");
+            airlines[a] = Airline(1, false, name, new address[](0), true);
+            return (true, 0);
+        } else {
+            if (airlines[a].mark == 0) {
+                airlines[a] = Airline(1, false, name, new address[](0), false);
+            }
+            if (airlines[tx.origin].funded) {
+                bool isDuplicate = false;
+                for (uint c = 0; c < airlines[a].confirmations.length; c++) {
+                    if (airlines[a].confirmations[c] == tx.origin) {
+                        isDuplicate = true;
+                        break;
+                    }
+                }
+                require(!isDuplicate, "confirm register has already been called by this airline");
+                airlines[a].confirmations.push(tx.origin);
+                if (airlines[a].confirmations.length >= uint256(nAirlines / 2)) {
+                    airlines[a].registered = true;
+                }
+                return (true, airlines[a].confirmations.length);
+            }
+            return (true, 0);
+        }
     }
 
 
@@ -112,12 +206,20 @@ contract FlightSuretyData {
     *
     */   
     function buy
-                            (                             
+                            ( 
+                                string flight,
+                                address airline                           
                             )
                             external
                             payable
+                            isCallerAuthorized
+                            requireIsOperational
     {
-
+        require(msg.value <= 1 ether, "Payment must be lower than 1 ether");
+        require(airlines[airline].funded, "Airline is not funded");
+        require(!insurancesByCustomer[tx.origin][flight], "Customer already purchased this insurance");
+        insurances[flight].push(Insurance(airline, msg.value, false, tx.origin));
+        insurancesByCustomer[tx.origin][flight] = true;
     }
 
     /**
@@ -125,10 +227,20 @@ contract FlightSuretyData {
     */
     function creditInsurees
                                 (
+                                    string flight
                                 )
                                 external
-                                pure
+                                isCallerAuthorized
+                                requireIsOperational
     {
+        for (uint c = 0; c < insurances[flight].length; c++) {
+            if (!insurances[flight][c].paidOut) {
+                insurances[flight][c].paidOut = true;
+                uint256 aux = credit[insurances[flight][c].customer]; 
+                uint256 add = uint256(aux / 2);
+                credit[insurances[flight][c].customer] += add;
+            }
+        } 
     }
     
 
@@ -140,8 +252,12 @@ contract FlightSuretyData {
                             (
                             )
                             external
-                            pure
+                            requireIsOperational
     {
+        require(credit[tx.origin] > 0, "No funds to transfer");
+        uint256 cred = credit[tx.origin];
+        credit[tx.origin] = 0;
+        tx.origin.transfer(cred);
     }
 
    /**
@@ -154,7 +270,16 @@ contract FlightSuretyData {
                             )
                             public
                             payable
+                            isCallerAuthorized
+                            requireIsOperational
     {
+        require(airlines[tx.origin].mark == 1, "Airline must be registered");
+        require(airlines[tx.origin].registered, "Airline registration must be confirmed");
+        require(msg.value == 10 ether, "Funding value must be 10 ether");
+        require(!airlines[tx.origin].funded, "Airline is already funded");
+
+        airlines[tx.origin].funded = true;
+        nAirlines = nAirlines + 1;
     }
 
     function getFlightKey

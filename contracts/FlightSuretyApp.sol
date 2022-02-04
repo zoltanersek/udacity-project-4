@@ -25,6 +25,7 @@ contract FlightSuretyApp {
     uint8 private constant STATUS_CODE_LATE_OTHER = 50;
 
     address private contractOwner;          // Account used to deploy contract
+    FlightSuretyData flightSuretyData;
 
     struct Flight {
         bool isRegistered;
@@ -32,7 +33,7 @@ contract FlightSuretyApp {
         uint256 updatedTimestamp;        
         address airline;
     }
-    mapping(bytes32 => Flight) private flights;
+    mapping(string => Flight) private flights;
 
  
     /********************************************************************************************/
@@ -50,7 +51,7 @@ contract FlightSuretyApp {
     modifier requireIsOperational() 
     {
          // Modify to call data contract's status
-        require(true, "Contract is currently not operational");  
+        require(flightSuretyData.isOperational(), "Contract is currently not operational");  
         _;  // All modifiers require an "_" which indicates where the function body will be added
     }
 
@@ -73,10 +74,12 @@ contract FlightSuretyApp {
     */
     constructor
                                 (
+                                    address dataContract
                                 ) 
                                 public 
     {
         contractOwner = msg.sender;
+        flightSuretyData = FlightSuretyData(dataContract);
     }
 
     /********************************************************************************************/
@@ -85,10 +88,10 @@ contract FlightSuretyApp {
 
     function isOperational() 
                             public 
-                            pure 
+                            view 
                             returns(bool) 
     {
-        return true;  // Modify to call data contract's status
+        return flightSuretyData.isOperational();  // Modify to call data contract's status
     }
 
     /********************************************************************************************/
@@ -102,12 +105,14 @@ contract FlightSuretyApp {
     */   
     function registerAirline
                             (   
+                                address a,
+                                string name
                             )
                             external
-                            pure
                             returns(bool success, uint256 votes)
+                            
     {
-        return (success, 0);
+        return flightSuretyData.registerAirline(a, name);
     }
 
 
@@ -117,11 +122,18 @@ contract FlightSuretyApp {
     */  
     function registerFlight
                                 (
+                                    string name,
+                                    address airline
                                 )
                                 external
-                                pure
+                                payable
     {
-
+        if (flights[name].isRegistered) {
+            require(flights[name].airline == airline, "Flight is already registered with a different airline");
+            require(flights[name].statusCode == STATUS_CODE_UNKNOWN, "Flight is already cancelled or landed");
+        }
+        flights[name] = Flight(true, STATUS_CODE_UNKNOWN, now, airline);
+        flightSuretyData.buy.value(msg.value)(name, airline);
     }
     
    /**
@@ -136,8 +148,11 @@ contract FlightSuretyApp {
                                     uint8 statusCode
                                 )
                                 internal
-                                pure
     {
+        flights[flight] = Flight(true, statusCode, timestamp, airline);
+        if (statusCode == STATUS_CODE_LATE_AIRLINE) {
+            flightSuretyData.creditInsurees(flight);
+        }
     }
 
 
@@ -161,6 +176,15 @@ contract FlightSuretyApp {
 
         emit OracleRequest(index, airline, flight, timestamp);
     } 
+
+    function fund() public payable {
+        flightSuretyData.fund.value(msg.value)();
+    }
+
+    function setOperatingStatus(bool mode) public {
+        flightSuretyData.setOperatingStatus(mode);                        
+    }
+
 
 
 // region ORACLE MANAGEMENT
@@ -334,4 +358,13 @@ contract FlightSuretyApp {
 
 // endregion
 
-}   
+}  
+
+contract FlightSuretyData {
+    function registerAirline(address a, string name) external returns(bool success, uint256 votes);
+    function creditInsurees(string flight) external;
+    function buy(string flight, address airline) external payable;
+    function fund() external payable;
+    function isOperational() external view returns(bool);
+    function setOperatingStatus(bool mode) external;
+}
